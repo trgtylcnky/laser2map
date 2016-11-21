@@ -21,7 +21,9 @@
 
 
 
-
+#define CREATE_LASER_CLOUD
+#define CREATE_MAP_CLOUD
+#define CREATE_MATCH_CLOUD
 
 
 	//void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr&);
@@ -45,13 +47,11 @@ void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& i
 
 	sensor_msgs::LaserScan scan_in = *in;
 
+    #ifdef CREATE_LASER_CLOUD
     laserCloud.points.clear();
+    #endif
+
     sensor_data.clear();
-
-
-	//transformListener.waitForTransform("/base_laser_link", "/map", ros::Time::now(), ros::Duration(10.0) );
-	//ROS_INFO("laser scan get");
-		//projector.transformLaserScanToPointCloud("/base_laser_link", *scan_in, laserCloud, transformListener);
 
     tf::StampedTransform laserTransform;
 
@@ -84,8 +84,9 @@ void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& i
         float x = cos(angle)*range + laser_x;
         float y = sin(angle)*range + laser_y;
 
-
+        #ifdef CREATE_LASER_CLOUD
         laserCloud.points.push_back(pcl::PointXYZ(x,y,0));
+        #endif
 
         Point2 p;
         p.x=x;
@@ -99,8 +100,9 @@ void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& i
 
 	}
 
+    #ifdef CREATE_LASER_CLOUD
     laserCloud.header.frame_id="/map";
-
+    #endif
 
 }
 
@@ -112,8 +114,9 @@ void laser2map::getMapTopic(nav_msgs::OccupancyGrid map)
     map_position_x = map.info.origin.position.x;
     map_position_y = map.info.origin.position.y;
 
-
+    #ifdef CREATE_MAP_CLOUD
     mapPointCloud.points.clear();
+    #endif
 
 
 	for(int i=0; i<map_width*map_height; i++)
@@ -121,11 +124,12 @@ void laser2map::getMapTopic(nav_msgs::OccupancyGrid map)
 	{
 
 
-			float x = (i%map_width)*map.info.resolution + map.info.origin.position.x;
-            float y = (i/map_width)*map.info.resolution + map.info.origin.position.y;
+		float x = (i%map_width)*map.info.resolution + map.info.origin.position.x;
+        float y = (i/map_width)*map.info.resolution + map.info.origin.position.y;
 
 			//ROS_INFO("%f   %f  %d",x,y,map.data[i]);		
 
+        #ifdef CREATE_MAP_CLOUD
 
 		if(map.data[i]>0)
 		{
@@ -135,6 +139,9 @@ void laser2map::getMapTopic(nav_msgs::OccupancyGrid map)
 
 		}
 		mapPointCloud.header.frame_id="/map";
+
+        #endif 
+
 
 		map_data.push_back(map.data[i]);
 
@@ -152,8 +159,9 @@ float laser2map::calculateMatch()
 {
     if(!we_have_map) return 0;
 
+    #ifdef CREATE_MATCH_CLOUD
     matchCloud.points.clear();
-    //printf("calculating.. points: %d \n", sensor_data.size());
+    #endif
 
 	int matched=0;
 
@@ -167,10 +175,6 @@ float laser2map::calculateMatch()
 
 		int index = pixel_y*map_width + pixel_x;
 
-
-
-
-
         int s = 3;
 
         bool ismatched = false;
@@ -182,18 +186,17 @@ float laser2map::calculateMatch()
 
 
                 index = pixel_y*map_width + pixel_x + map_width*i_y + i_x;
-               // printf("%f %f %f %f %f %d  %d  %d\n",sensor_data[i].x, sensor_data[i].y, (sensor_data[i].x - map_position_x) /map_resolution , map_position_x, map_resolution, i_x, i_y, index);
-
+                             
                 if(index >= map_data.size() || index <0) continue;
 
-               // printf("point: %d %d :  %f %f\n",pixel_x, pixel_y, sensor_data[i].x, sensor_data[i].y);
-
-              //  printf(" %d\n", map_data[index]);
 
                 if(map_data[index]>0 && !ismatched) {
                     ismatched = true;
 
+                    #ifdef CREATE_MATCH_CLOUD
                     matchCloud.points.push_back(pcl::PointXYZ(sensor_data[i].x, sensor_data[i].y, 0));
+                    #endif CREATE_MATCH_CLOUD
+
                     matched++;
 
 
@@ -202,20 +205,28 @@ float laser2map::calculateMatch()
         }
 
 	}
-	//printf("end calculating");
-	matchCloud.header.frame_id="/map";
 
+    #ifdef CREATE_MATCH_CLOUD
+	matchCloud.header.frame_id="/map";
+    #endif
 
 	return matched / float(sensor_data.size());
 }
 
 void laser2map::pub()
 {
-	//ROS_INFO("publishing..");
 	
+    #ifdef CREATE_LASER_CLOUD
 	pointCloudPublisher.publish(laserCloud);
+    #endif
+
+    #ifdef CREATE_MAP_CLOUD
 	mapPublisher.publish(mapPointCloud);
+    #endif
+
+    #ifdef CREATE_MATCH_CLOUD
     matchPublisher.publish(matchCloud);
+    #endif
 
 
 }
@@ -251,9 +262,6 @@ void laser2map::basitAlignment()
 
                     sensor_data[i].x = local_x*cos(drift_angle) - local_y*sin(drift_angle) + laser_x + drift_x;
                     sensor_data[i].y = local_x*sin(drift_angle) + local_y*cos(drift_angle) + laser_y + drift_y;
-
-                    //ROS_INFO("%f %f %f %f", laser_x, local_x,cos(drift_angle), laserCloud.points[i].x);
-
                     
 
                 }
@@ -264,19 +272,18 @@ void laser2map::basitAlignment()
                 if (m > max_match)
                 {
                     max_match = m;
+
+                    #ifdef CREATE_LASER_CLOUD
                     for (int i=0; i<sensor_data.size(); i++)
                     {
-
 
                         laserCloud.points[i].x = sensor_data[i].x; 
 
                         laserCloud.points[i].y = sensor_data[i].y;
 
-                        
-                        //ROS_INFO("%f %f %f %f", laser_x, local_x,cos(drift_angle), laserCloud.points[i].x);
-
                     }
                     pub();
+                    #endif
 
                     _x = drift_x + laser_x;
                     _y = drift_y + laser_y;
@@ -332,6 +339,10 @@ void laser2map::basitAlignment()
 
 void laser2map::applyICPTransform()
 {
+
+#ifdef CREATE_LASER_CLOUD
+#ifdef CREATE_MAP_CLOUD
+
     pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
     icp.setInputSource(laserCloud.makeShared());
     icp.setInputTarget(mapPointCloud.makeShared());
@@ -394,6 +405,8 @@ void laser2map::applyICPTransform()
 
     }
 
+#endif
+#endif
 }
 
 

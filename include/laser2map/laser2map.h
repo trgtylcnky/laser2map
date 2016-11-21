@@ -14,6 +14,9 @@
 
 #include "ros/ros.h"
 
+#define CREATE_LASER_CLOUD
+#define CREATE_MAP_CLOUD
+#define CREATE_MATCH_CLOUD
 
 using namespace std;
 
@@ -38,11 +41,18 @@ public:
 
 
     nav_msgs::OccupancyGrid our_map;
-    //sensor_msgs::PointCloud2 laserCloud;
+
+    #ifdef CREATE_LASER_CLOUD
     pcl::PointCloud<pcl::PointXYZ> laserCloud;
-    //sensor_msgs::PointCloud2 mapCloud;
+    #endif
+
+    #ifdef CREATE_MAP_CLOUD
     pcl::PointCloud<pcl::PointXYZ> mapPointCloud;
+    #endif
+
+    #ifdef CREATE_MATCH_CLOUD
     pcl::PointCloud<pcl::PointXYZ> matchCloud;
+    #endif
 
     vector<char> map_data;
     int map_width, map_height;
