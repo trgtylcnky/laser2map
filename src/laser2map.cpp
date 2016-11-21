@@ -53,14 +53,24 @@ void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& i
 	//ROS_INFO("laser scan get");
 		//projector.transformLaserScanToPointCloud("/base_laser_link", *scan_in, laserCloud, transformListener);
 
-        tf::StampedTransform laserTransform;
+    tf::StampedTransform laserTransform;
+
+    try
+    {
         transformListener.waitForTransform("/map", "/base_laser_link", ros::Time(0), ros::Duration(10.0));
         transformListener.lookupTransform("/map", "/base_laser_link", ros::Time(0), laserTransform);
 
-        double r, p;
-        tf::Matrix3x3(laserTransform.getRotation()).getRPY(r,p,laser_yaw);
-        laser_x = laserTransform.getOrigin().x();
-        laser_y = laserTransform.getOrigin().y();
+    }
+    catch (tf::TransformException ex)
+    {
+        ROS_ERROR("%s", ex.what());
+    }
+        
+
+    double r, p;
+    tf::Matrix3x3(laserTransform.getRotation()).getRPY(r,p,laser_yaw);
+    laser_x = laserTransform.getOrigin().x();
+    laser_y = laserTransform.getOrigin().y();
 
 
 
@@ -280,10 +290,16 @@ void laser2map::basitAlignment()
     }
 
     tf::StampedTransform laser_to_base;
-    
-    transformListener.waitForTransform("/base_laser_link", "/base_footprint", ros::Time(0), ros::Duration(10.0));
-    transformListener.lookupTransform("/base_laser_link", "/base_footprint", ros::Time(0), laser_to_base);
+    try
+    {
+        transformListener.waitForTransform("/base_laser_link", "/base_footprint", ros::Time(0), ros::Duration(10.0));
+        transformListener.lookupTransform("/base_laser_link", "/base_footprint", ros::Time(0), laser_to_base);
 
+    }
+    catch (tf::TransformException ex)
+    {
+        ROS_ERROR("%s", ex.what());
+    }
     tf::Quaternion qua;
     qua.setEuler(0, 0, _yaw);
 
@@ -338,9 +354,16 @@ void laser2map::applyICPTransform()
         ROS_INFO("sending..");
         tf::StampedTransform laserTransform;
 
-        transformListener.waitForTransform("/map", "/base_laser_link", ros::Time(0), ros::Duration(10.0));
-        transformListener.lookupTransform("/map", "/base_laser_link", ros::Time(0), laserTransform);
+        try
+        {
+            transformListener.waitForTransform("/map", "/base_laser_link", ros::Time(0), ros::Duration(10.0));
+            transformListener.lookupTransform("/map", "/base_laser_link", ros::Time(0), laserTransform);
+        }
+        catch (tf::TransformException ex)
+        {
+            ROS_ERROR("%s", ex.what());
 
+        }
         tf_transform = tf_transform * laserTransform;
         geometry_msgs::PoseWithCovarianceStamped pose;
         pose.header.frame_id = "map";
