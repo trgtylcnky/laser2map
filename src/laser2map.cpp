@@ -19,39 +19,48 @@
 #include <pcl/registration/sample_consensus_prerejective.h>
 #include <pcl/segmentation/sac_segmentation.h>
 
+#include <visualization_msgs/Marker.h>
 
 
-#define CREATE_LASER_CLOUD
-#define CREATE_MAP_CLOUD
-#define CREATE_MATCH_CLOUD
-
-
-	//void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr&);
 
 laser2map::laser2map()
 {
-	mapPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("our_map", 1000);
-	matchPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("our_match", 1000);
-	laserSubscriber = nodeHandle.subscribe("scan", 1000, &laser2map::getPointCloudFromLaser, this);
-	pointCloudPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("our_points", 1000);
-	mapSubscriber = nodeHandle.subscribe("map", 1000, &laser2map::getMapTopic, this);
+
+	laserSubscriber = nodeHandle.subscribe("scan", 1000, &laser2map::callbackLaser, this);
+	mapSubscriber = nodeHandle.subscribe("map", 1000, &laser2map::callbackMap, this);
     posePublisher = nodeHandle.advertise<geometry_msgs::PoseWithCovarianceStamped>("initialpose", 1);
 
     we_have_map = false;
 
+    #ifdef CREATE_MAP_CLOUD
+    mapPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("our_map", 1000);
+    #endif
+
+    #ifdef CREATE_LASER_CLOUD
+    pointCloudPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("our_points", 1000);
+    #endif
+
+    #ifdef CREATE_MATCH_CLOUD
+    matchPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("our_match", 1000);
+    #endif
+
+    artLaserPublisher = nodeHandle.advertise<pcl::PointCloud<pcl::PointXYZ> >("artificial_laser", 1000);
+
+    marker_pub = nodeHandle.advertise<visualization_msgs::Marker>("visualization_marker", 10);
+
 }
 
-void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& in)
+void laser2map::callbackLaser(const sensor_msgs::LaserScan::ConstPtr& in)
 {
-	laser_geometry::LaserProjection projector;
-
-	sensor_msgs::LaserScan scan_in = *in;
+    
+	scan_in = *in;
 
     #ifdef CREATE_LASER_CLOUD
     laserCloud.points.clear();
     #endif
 
     sensor_data.clear();
+    sensor_data_reduced.clear();
 
     tf::StampedTransform laserTransform;
 
@@ -92,11 +101,13 @@ void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& i
         p.x=x;
         p.y=y;
 
-        if(i==0 || x < sensor_data[sensor_data.size()-1].x - map_resolution 
-            || x > sensor_data[sensor_data.size()-1].x + map_resolution 
-            || y < sensor_data[sensor_data.size()-1].y - map_resolution 
-            || x > sensor_data[sensor_data.size()-1].x + map_resolution )
-            sensor_data.push_back(p);
+        sensor_data.push_back(p);
+
+        if(i==0 || x < sensor_data_reduced[sensor_data_reduced.size()-1].x - map_resolution 
+            || x > sensor_data_reduced[sensor_data_reduced.size()-1].x + map_resolution 
+            || y < sensor_data_reduced[sensor_data_reduced.size()-1].y - map_resolution 
+            || x > sensor_data_reduced[sensor_data_reduced.size()-1].x + map_resolution )
+            sensor_data_reduced.push_back(p);
 
 	}
 
@@ -106,8 +117,9 @@ void laser2map::getPointCloudFromLaser(const sensor_msgs::LaserScan::ConstPtr& i
 
 }
 
-void laser2map::getMapTopic(nav_msgs::OccupancyGrid map)
+void laser2map::callbackMap(nav_msgs::OccupancyGrid _map)
 {
+    map = _map;
 	map_width = map.info.width;
 	map_height = map.info.height;
 	map_resolution = map.info.resolution;
@@ -155,9 +167,11 @@ void laser2map::getMapTopic(nav_msgs::OccupancyGrid map)
 
 }
 
-float laser2map::calculateMatch()
+
+//Calculate the match ratio between given points and map
+//within a match tolerance
+float laser2map::calculateMatch(vector<Point2>& source, float tolerance)
 {
-    if(!we_have_map) return 0;
 
     #ifdef CREATE_MATCH_CLOUD
     matchCloud.points.clear();
@@ -165,52 +179,57 @@ float laser2map::calculateMatch()
 
 	int matched=0;
 
+    int s = tolerance/map_resolution;
 
 
-    for(int i=0; i<sensor_data.size(); i++)
+
+    for(int i=0; i<source.size(); i++)
 	{
 
-        int pixel_x =int( (sensor_data[i].x - map_position_x) /map_resolution );
-        int pixel_y =int( (sensor_data[i].y - map_position_y) /map_resolution );
+        int pixel_x =int( (source[i].x - map_position_x) /map_resolution );
+        int pixel_y =int( (source[i].y - map_position_y) /map_resolution );
 
 		int index = pixel_y*map_width + pixel_x;
 
-        int s = 3;
-
+        //tolerance for match acceptance
+        //square frame
+        
         bool ismatched = false;
 
-        for(int i_x = -s; i_x <= s; i_x++)
+        for(int i_x = -s; i_x <= s && !ismatched; i_x++)
         {
-            for(int i_y = -s; i_y <= s; i_y++)
+            for(int i_y = -s; i_y <= s && !ismatched; i_y++)
             {
 
 
                 index = pixel_y*map_width + pixel_x + map_width*i_y + i_x;
                              
-                if(index >= map_data.size() || index <0) continue;
+                if(index < map_data.size() && index >=0) 
+                {
 
-
-                if(map_data[index]>0 && !ismatched) {
-                    ismatched = true;
+                    if(map_data[index]>0 && !ismatched) 
+                    {
+                        ismatched = true;
 
                     #ifdef CREATE_MATCH_CLOUD
-                    matchCloud.points.push_back(pcl::PointXYZ(sensor_data[i].x, sensor_data[i].y, 0));
-                    #endif CREATE_MATCH_CLOUD
+                        matchCloud.points.push_back(pcl::PointXYZ(source[i].x, source[i].y, 0));
+                    #endif 
 
-                    matched++;
+                        matched++;
 
 
+                    }
                 }
             }
         }
-
+        
 	}
 
     #ifdef CREATE_MATCH_CLOUD
 	matchCloud.header.frame_id="/map";
     #endif
 
-	return matched / float(sensor_data.size());
+	return matched / float(source.size());
 }
 
 void laser2map::pub()
@@ -231,8 +250,9 @@ void laser2map::pub()
 
 }
 
-void laser2map::basitAlignment()
+void laser2map::artMatch()
 {
+
     float min_x=-5;
     float min_y=-5;
     float  max_x=5;
@@ -241,13 +261,9 @@ void laser2map::basitAlignment()
     float y_increment = 0.2;
     float angle_increment = 0.1;
 
-    vector<Point2> _s_back = sensor_data;
+    float min_err = 9999;
 
-    float max_match = 0;
-
-    float _x, _y, _yaw;
-
-
+    float x, y, yaw;
 
     for (float drift_x = min_x; drift_x<max_x; drift_x+=x_increment)
     {
@@ -255,47 +271,130 @@ void laser2map::basitAlignment()
         {
             for (float drift_angle = 0; drift_angle < 6.28; drift_angle += angle_increment)
             {
-                for (int i=0; i<sensor_data.size(); i++)
+                float err = compareArtificialAndRealSensorData(drift_x, drift_y, drift_angle);
+                if(err < min_err)
                 {
-                    float local_x = _s_back[i].x - laser_x;
-                    float local_y = _s_back[i].y - laser_y;
+                    min_err = err;
+                    ROS_INFO("Match found: %f %f %f", drift_x, drift_y, drift_angle);
+                    x = drift_x;
+                    y = drift_y;
+                    yaw = drift_angle;
+                }
+            }
+        }
+    }
 
-                    sensor_data[i].x = local_x*cos(drift_angle) - local_y*sin(drift_angle) + laser_x + drift_x;
-                    sensor_data[i].y = local_x*sin(drift_angle) + local_y*cos(drift_angle) + laser_y + drift_y;
-                    
+    tf::StampedTransform laser_to_base;
+    try
+    {
+        transformListener.waitForTransform("/base_laser_link", "/base_footprint", ros::Time(0), ros::Duration(10.0));
+        transformListener.lookupTransform("/base_laser_link", "/base_footprint", ros::Time(0), laser_to_base);
+
+    }
+    catch (tf::TransformException ex)
+    {
+        ROS_ERROR("%s", ex.what());
+    }
+    tf::Quaternion qua;
+    qua.setEuler(0, 0, yaw);
+
+    tf::Transform map_to_base(qua, tf::Vector3(x, y, 0));
+    map_to_base = map_to_base * laser_to_base ;
+
+    geometry_msgs::PoseWithCovarianceStamped pose;
+
+    pose.pose.pose.position.x = map_to_base.getOrigin().x();
+    pose.pose.pose.position.y = map_to_base.getOrigin().y();
+
+    pose.pose.pose.orientation.x = map_to_base.getRotation().getX();
+    pose.pose.pose.orientation.y = map_to_base.getRotation().getY();
+    pose.pose.pose.orientation.z = map_to_base.getRotation().getZ();
+    pose.pose.pose.orientation.w = map_to_base.getRotation().getW();
+
+
+    pose.pose.covariance[0] = 0.4;
+    pose.pose.covariance[7] = 0.4;
+    pose.pose.covariance[35] = 0.1;
+
+    posePublisher.publish(pose);
+
+
+}
+
+//Move the sensor data over the map
+//Calculate the match ratio
+//Return the list of possible poses whose match ratio is greater than threshold
+
+vector<match2> laser2map::basitAlignment(float threshold)
+{
+    float min_x = 0 + map.info.origin.position.x;
+    float min_y = 0 + map.info.origin.position.y;
+    float  max_x = map.info.width * map.info.resolution + map.info.origin.position.x;
+    float  max_y = map.info.width * map.info.resolution + map.info.origin.position.y;
+    float x_increment = 0.2;
+    float y_increment = 0.2;
+    float angle_increment = 0.1;
+
+    vector<Point2> s_data;
+
+    vector<match2> matchedPoses;
+
+
+    for (float drift_x = min_x; drift_x<max_x; drift_x+=x_increment)
+    {
+        for (float drift_y = min_y; drift_y < max_y; drift_y += y_increment)
+        {
+            int pixel_x =int( (drift_x - map_position_x) /map_resolution );
+            int pixel_y =int( (drift_y - map_position_y) /map_resolution );
+
+            int index = pixel_y*map_width + pixel_x;
+
+            if (index >= 0 && index < map_data.size())
+                if (map_data[index] != 0) continue;
+
+            for (float drift_angle = 0; drift_angle < 6.28; drift_angle += angle_increment)
+            {
+                s_data.clear();
+
+                for (int i=0; i<scan_in.ranges.size(); i++)
+                {
+
+                    float angle = scan_in.angle_min + i*(scan_in.angle_increment) + drift_angle;
+                    float range = scan_in.ranges[i];
+
+                    Point2 p;
+                    p.x = cos(angle)*range + drift_x;
+                    p.y = sin(angle)*range + drift_y;
+
+                    if(i==0 || p.x > s_data[s_data.size()-1].x + map.info.resolution || p.y > s_data[s_data.size()-1].y + map.info.resolution
+                        || p.x < s_data[s_data.size()-1].x - map.info.resolution || p.y < s_data[s_data.size()-1].y - map.info.resolution)
+
+                        s_data.push_back(p);
 
                 }
 
-                float m = calculateMatch();
                 
+                //ROS_INFO("calculating: %f %f %f", drift_x, drift_y, drift_angle);
+                float m = calculateMatch(s_data, 0.15);
 
-                if (m > max_match)
+                if (m > threshold)
                 {
-                    max_match = m;
 
-                    #ifdef CREATE_LASER_CLOUD
-                    for (int i=0; i<sensor_data.size(); i++)
-                    {
+                    match2 mat;
+                    mat.x=drift_x;
+                    mat.y=drift_y;
+                    mat.yaw=drift_angle;
+                    mat.score=m;
+                    matchedPoses.push_back(mat);
 
-                        laserCloud.points[i].x = sensor_data[i].x; 
-
-                        laserCloud.points[i].y = sensor_data[i].y;
-
-                    }
-                    pub();
-                    #endif
-
-                    _x = drift_x + laser_x;
-                    _y = drift_y + laser_y;
-                    _yaw = drift_angle + laser_yaw;
-
-                    ROS_INFO("%f match found: %f %f %f",m, drift_x+laser_x, drift_y+laser_y, drift_angle+laser_yaw);
+                    //ROS_INFO("match found %f %f %f %f", mat.score, mat.x, mat.y, mat.yaw);
 
                 }
             }
         }
     }
 
+/*
     tf::StampedTransform laser_to_base;
     try
     {
@@ -330,11 +429,49 @@ void laser2map::basitAlignment()
 
     posePublisher.publish(pose);
 
+*/
 
-    sensor_data = _s_back;
+    return matchedPoses;
+
+}
 
 
 
+void laser2map::publishPose(float x, float y, float yaw)
+{
+    tf::StampedTransform laser_to_base;
+    try
+    {
+        transformListener.waitForTransform("/base_laser_link", "/base_footprint", ros::Time(0), ros::Duration(10.0));
+        transformListener.lookupTransform("/base_laser_link", "/base_footprint", ros::Time(0), laser_to_base);
+
+    }
+    catch (tf::TransformException ex)
+    {
+        ROS_ERROR("%s", ex.what());
+    }
+    tf::Quaternion qua;
+    qua.setEuler(0, 0, yaw);
+
+    tf::Transform map_to_base(qua, tf::Vector3(x, y, 0));
+    map_to_base = map_to_base * laser_to_base ;
+
+    geometry_msgs::PoseWithCovarianceStamped pose;
+
+    pose.pose.pose.position.x = map_to_base.getOrigin().x();
+    pose.pose.pose.position.y = map_to_base.getOrigin().y();
+
+    pose.pose.pose.orientation.x = map_to_base.getRotation().getX();
+    pose.pose.pose.orientation.y = map_to_base.getRotation().getY();
+    pose.pose.pose.orientation.z = map_to_base.getRotation().getZ();
+    pose.pose.pose.orientation.w = map_to_base.getRotation().getW();
+
+
+    pose.pose.covariance[0] = 0.4;
+    pose.pose.covariance[7] = 0.4;
+    pose.pose.covariance[35] = 0.1;
+
+    posePublisher.publish(pose);
 }
 
 void laser2map::applyICPTransform()
@@ -409,5 +546,192 @@ void laser2map::applyICPTransform()
 #endif
 }
 
+vector<Point2> laser2map::artificialSensorData(float x, float y, float yaw)
+{
+   
 
 
+    vector<Point2> ld;
+
+    int i=0;
+
+    for(float a = scan_in.angle_min; i<scan_in.ranges.size(); a += scan_in.angle_increment, i++)
+    {
+        Point2 p;
+        for(float r = scan_in.range_min; r <= scan_in.range_max; r += map_resolution/2)
+        {
+            p.x = x + r*cos(yaw + a);
+            p.y = y + r*sin(yaw + a);
+
+            int pixel_x =int( (p.x - map_position_x) /map_resolution );
+            int pixel_y =int( (p.y - map_position_y) /map_resolution );
+
+            int index = pixel_y*map_width + pixel_x;
+
+            if(0 <= index && index < map_data.size() )
+                if(map_data[index] > 0) break;
+        }
+
+        ld.push_back(p);
+
+    }
+
+    
+    artLaserCloud.clear();
+    for(i = 0; i<ld.size(); i++)
+    {
+        pcl::PointXYZ pcl_p;
+        pcl_p.x = ld[i].x;
+        pcl_p.y = ld[i].y;
+        pcl_p.z = 0;
+
+        artLaserCloud.points.push_back(pcl_p);
+    }
+    artLaserCloud.header.frame_id = "/map";
+
+    artLaserPublisher.publish(artLaserCloud);
+    
+    
+
+    return ld;
+
+}
+
+float laser2map::compareArtificialAndRealSensorData(float x, float y, float yaw)
+{
+    vector<char> real_data(map_data.size(), 0);
+
+
+
+laserCloud.clear();
+
+
+    for(int i=0; i< scan_in.ranges.size(); i++ )
+    {
+
+        float angle = scan_in.angle_min + i*(scan_in.angle_increment) + yaw;
+        float range = scan_in.ranges[i];
+
+        float _x = cos(angle)*range + x;
+        float _y = sin(angle)*range + y;
+
+        int pixel_x =int( (_x - map_position_x) /map_resolution );
+        int pixel_y =int( (_y - map_position_y) /map_resolution );
+
+        int index = pixel_y*map_width + pixel_x;
+
+        if(index >= 0 && index < real_data.size() ) real_data[index] = 100;
+
+
+
+        #ifdef CREATE_LASER_CLOUD
+        
+        laserCloud.points.push_back(pcl::PointXYZ(_x,_y,0));
+        
+        #endif
+
+
+        
+
+    }
+    pub();
+
+    
+    vector<Point2> art = artificialSensorData(x, y, yaw);
+
+    int matched = 0;
+
+    for (int i=0; i < art.size(); i++)
+    {
+        int pixel_x =int( (art[i].x - map_position_x) /map_resolution );
+        int pixel_y =int( (art[i].y - map_position_y) /map_resolution );
+
+        int s = 2;
+
+        bool ismatched = false;
+
+        for(int i_x = -s; i_x <= s; i_x++)
+        {
+            for(int i_y = -s; i_y <= s; i_y++)
+            {
+
+
+                int index = pixel_y*map_width + pixel_x + map_width*i_y + i_x;
+                             
+                if(index >= real_data.size() || index <0 || ismatched) continue;
+
+
+                if(real_data[index]>0 ) {
+                    ismatched = true;
+
+                    matched++;
+
+                }
+            }
+        }
+
+    }
+
+
+/*
+
+    float sum_err_sq = 0;
+
+    if(art.size() != real_data.size())
+        ROS_ERROR("artificial and real sensor datas does not match: %lu %lu", art.size(), real_data.size());
+
+
+    int nearest_index[real_data.size()];
+
+    for(int i = 0; i < real_data.size(); i++)
+    {
+        float nearest = 100;
+        int ni = 0;
+        for(int k = 0; k < art.size(); k++)
+        {
+            float e = pow(real_data[i].x - art[k].x, 2) + pow(real_data[i].y - art[k].y, 2);
+            if (e < nearest) 
+                {
+                    nearest = e;
+                    ni = k;
+                }
+        }
+        sum_err_sq += nearest;
+
+        nearest_index[i] = ni;
+        
+    }
+
+
+
+
+    visualization_msgs::Marker line_list;
+    line_list.header.frame_id = "/map";
+    line_list.id = 150;
+    line_list.type = visualization_msgs::Marker::LINE_LIST;
+    line_list.color.r = 1;
+    line_list.color.a = 1;
+    line_list.header.stamp = ros::Time::now();
+    line_list.pose.orientation.w = 1.0;
+    line_list.action = visualization_msgs::Marker::ADD;
+    line_list.ns = "points_and_lines";
+
+
+    for(int i=0; i<real_data.size(); i++)
+    {
+        geometry_msgs::Point p;
+        p.x = real_data[i].x;
+        p.y = real_data[i].y;
+        p.z = 0;
+        line_list.points.push_back(p);
+        p.x = real_data[nearest_index[i]].x;
+        p.y = real_data[nearest_index[i]].y;
+        line_list.points.push_back(p);
+    }
+
+    marker_pub.publish(line_list);
+    */
+
+    return matched/float(art.size());
+
+}

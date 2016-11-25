@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   pcl_conversions
   pcl_ros
+  visualization_msgs 
 
 )
 
